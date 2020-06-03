@@ -45,11 +45,11 @@ namespace ReservationsUpdate
 
     }
 
-    class Program
+    public class Program
     {
         const int batchsize = 500;
         const int daysback = 14;
-        const int monthspollsize = 2;
+        const int monthspollsize = 1;
         const int monthstopull = 16;
         const int numberofpulls = monthstopull / monthspollsize;  // This better be an int
         public static void LogMessage(string message)
@@ -101,7 +101,7 @@ namespace ReservationsUpdate
                 for (int dategrouppoll = 0; dategrouppoll < numberofpulls; dategrouppoll++)
                 {
                     string result = StreamLineResult(slproperty["credential1"].ToString(), slproperty["credential2"].ToString(), dategrouppoll);
-
+                    int propertycount = 0;
                     dynamic jsonresults = JsonConvert.DeserializeObject(result);
                     try
                     {
@@ -116,11 +116,14 @@ namespace ReservationsUpdate
                             sqlstatement += BuildSLUpsert(reservation, 17167, "Streamline", company);
                             if (counter++ % batchsize == 0)
                             {
-                                RunTransaction(sql1, sqlstatement);
+                                propertycount += sql1.SQLExecute(sqlstatement);
+                                //propertycount += RunTransaction(sql1, sqlstatement);
                                 sqlstatement = "";
                             }
                         }
-                        RunTransaction(sql1, sqlstatement);
+                        //RunTransaction(sql1, sqlstatement);
+                        propertycount += sql1.SQLExecute(sqlstatement);
+                        LogMessage($"Processed {propertycount} blocks of properties for {company} in group {dategrouppoll}.");
 
                     }
                     catch (Exception)
@@ -184,19 +187,35 @@ namespace ReservationsUpdate
         }
         public static string GetSLStatusName(int code)
         {
-            return code switch
+
+            switch (code)
             {
-                0 => "Non Blocked Request",
-                1 => "Blocked Request",
-                2 => "Booked",
-                4 => "Booked but Modified",
-                5 => "Checked In",
-                6 => "Modified and Checked In",
-                8 => "Checked Out",
-                9 => "Cancelled",
-                10 => "No Show",
-                _ => "Unknown",
-            };
+                case 0: return "Non Blocked Request";
+                case 1: return "Blocked Request";
+                case 2: return "Booked";
+                case 4: return "Booked but Modified";
+                case 5: return "Checked In";
+                case 6: return "Modified and Checked In";
+                case 8: return "Checked Out";
+                case 9: return "Cancelled";
+                case 10: return "No Show";
+            }
+            return "Unknown";
+
+
+            //return code switch
+            //{
+            //    0 => "Non Blocked Request",
+            //    1 => "Blocked Request",
+            //    2 => "Booked",
+            //    4 => "Booked but Modified",
+            //    5 => "Checked In",
+            //    6 => "Modified and Checked In",
+            //    8 => "Checked Out",
+            //    9 => "Cancelled",
+            //    10 => "No Show",
+            //    _ => "Unknown",
+            //};
         }
 
         public static string NoBobbyTables(string input)
@@ -224,8 +243,10 @@ namespace ReservationsUpdate
             {
                 string company = vrmproperty["companyname"].ToString();
                 LogMessage($"Pulling data for {company}");
+                
                 for (int dategrouppoll = 0; dategrouppoll < numberofpulls; dategrouppoll++)
                 {
+                    int propertycount = 0;
                     string result = VRMResult(vrmproperty["credential1"].ToString(), vrmproperty["credential2"].ToString(),dategrouppoll);
 
                     dynamic jsonresults = JsonConvert.DeserializeObject(result);
@@ -239,12 +260,16 @@ namespace ReservationsUpdate
                         sqlstatement += BuildVRMUpsert(reservation, 17167, "VRM", company);
                         if (counter++ % batchsize == 0)
                         {
-                            RunTransaction(sql1, sqlstatement);
+                            //propertycount += sql1.SQLExecute(sqlstatement);
+                            propertycount += RunTransaction(sql1, sqlstatement);
                             sqlstatement = "";
                         }
                     }
-                    RunTransaction(sql1, sqlstatement);
+                    if (sqlstatement != "")
+                        propertycount += RunTransaction(sql1, sqlstatement);
+                    LogMessage($"Processed {propertycount} blocks of properties for {company} in group {dategrouppoll}.");
                 }
+                
             }
         }
 
@@ -311,15 +336,27 @@ namespace ReservationsUpdate
 
         public static int RunTransaction(SQLFunctions sql,string sqlstatement)
         {
+            int result = -1;
             try
             {
-                return sql.SQLExecute($"Begin Transaction; {sqlstatement} Commit;");
+                result = sql.SQLExecute($"Begin Transaction; {sqlstatement} Commit;");
             }
             catch (Exception ex)
             {
-                LogMessage($"SQL Transaction blew up because {ex.Message}");
-                return -1;
+                LogMessage($"SQL Transaction first attempt blew up because {ex.Message}");
+                System.Threading.Thread.Sleep(60000);
+                try
+                {
+                    result = sql.SQLExecute($"Begin Transaction; {sqlstatement} Commit;");
+                    LogMessage("Second attempt worked");
+
+                }
+                catch (Exception exi)
+                {
+                    LogMessage($"SQL Transaction second attempt blew up because {exi.Message}");
+                }
             }
+            return result;
         }
 
     }
