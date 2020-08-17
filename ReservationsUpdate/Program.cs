@@ -34,6 +34,9 @@ namespace ReservationsUpdate
 
         [JsonProperty("arriving_before")]
         public string ArriveBefore { get; set; }
+
+        [JsonProperty("show_master_cancel")]
+        public int ShowMasterCancel { get; set; }
     }
 
     public class VRMReservations
@@ -43,6 +46,24 @@ namespace ReservationsUpdate
         public string DateEnd { get; set; }
         public string ClientCode { get; set; }
 
+    }
+
+    public class StreamlineRenewTokens
+    {
+        [JsonProperty("methodName")]
+        public string MethodName { get; set; }
+
+        [JsonProperty("params")]
+        public StreamlineRenewalParameters renparms { get; set; }
+    }
+
+    public class StreamlineRenewalParameters
+    {
+        [JsonProperty("token_key")]
+        public string TokenKey { get; set; }
+
+        [JsonProperty("token_secret")]
+        public string TokenSecret { get; set; }
     }
 
     public class Program
@@ -76,21 +97,91 @@ namespace ReservationsUpdate
             return DateTime.Now.AddDays(-daysback).AddMonths(monthspollsize * (pollnumber + 1)).ToString(dateformat);
         }
 
-
         static void Main(string[] args)
         {
-            ProcessStreamline();
-            ProcessVRM();
+            if (args.Length == 0)
+            {
+                ProcessStreamline();
+                ProcessVRM();
+            }
+            else if (args[0].ToLower() == "renew")
+            {
+                RenewStreamline();
+            }
         }
-         
+
+        private static void RenewStreamline()
+        {
+            SQLFunctions sql = new SQLFunctions(Secrets.CRMConnectionString());
+
+            List<Dictionary<string, object>> slproperties = sql.ListDictionarySQLQuery("select PMC as companyname, credential1, credential2 from VacationCredentials" +
+                " where gatewayname = 'streamline'");
+
+            foreach (Dictionary<string, object> slproperty in slproperties)
+            {
+                string company = slproperty["companyname"].ToString();
+                LogMessage($"renewing tokens for for {company}");
+                string result = StreamLineNewTokens(slproperty["credential1"].ToString(), slproperty["credential2"].ToString());
+                LogMessage($"Token Stream: {result}");
+                dynamic jsonresults = JsonConvert.DeserializeObject(result);
+                try
+                {
+                    string new_tokenkey = $"{jsonresults.data.token_key}";
+                    string new_tokensecret = $"{jsonresults.data.token_secret}";
+                    string token_startdate = $"{jsonresults.data.startdate}";
+                    string token_enddate = $"{jsonresults.data.enddate}";
+
+                    string sqlstatement = StreamLineNewTokenSQLUpdate(company, new_tokenkey, new_tokensecret, token_startdate, token_enddate);
+                    int sqlresult = sql.SQLExecute(sqlstatement);
+                    Console.WriteLine($"Update to {company} result {sqlresult}");
+
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"Error updating company {company} because {ex.Message}");
+                }
+            }
+         }
+
+        private static string StreamLineNewTokenSQLUpdate(string PMC, string cred1, string cred2, string updated, string expires)
+        {
+            return "Begin transaction; " +
+            "update vacationcredentials set oldcredential1 = credential1, oldcredential2 = credential2 " +
+            $"where PMC = '{PMC}' and gatewayname = 'Streamline'; " +
+            $"update vacationcredentials set credential1 = '{cred1}', Credential2 = '{cred2}', " +
+            $"TokenUpdated = '{updated}', TokenExpires = '{expires}', Modifiedon = GetDate() " +
+            $"where PMC = '{PMC}' and gatewayname = 'Streamline'; " +
+            "commit;";
+        }
+
+        private static string StreamLineNewTokens(string tokenkey, string tokensecret)
+        {
+            string url = "https://web.streamlinevrs.com/api/mjson";  
+
+            var payload = new StreamlineRenewTokens
+            {
+                MethodName = "RenewExpiredToken",
+                renparms = new StreamlineRenewalParameters
+                {
+                    TokenKey = tokenkey,
+                    TokenSecret = tokensecret
+                }
+            };
+           
+            return GetHTTPResults(url, new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json"));
+        }
 
         private static  void ProcessStreamline()
         {
             SQLFunctions sql = new SQLFunctions(Secrets.CRMConnectionString());
             SQLFunctions sql1 = new SQLFunctions(Secrets.ReportingConnectionString());
 
+            //List<Dictionary<string, object>> slproperties = sql.ListDictionarySQLQuery("select PMC as companyname, credential1, credential2 from VacationCredentials" +
+            //    " where gatewayname = 'streamline'");
+
             List<Dictionary<string, object>> slproperties = sql.ListDictionarySQLQuery("select PMC as companyname, credential1, credential2 from VacationCredentials" +
-                " where gatewayname = 'streamline'");
+           //" where gatewayname = 'streamline'");// and id >= 175");
+             " where gatewayname = 'streamline' and id = 162");
 
             List<string> badones = new List<string>();
 
@@ -155,7 +246,8 @@ namespace ReservationsUpdate
                     TokenSecret = tokensecret,
                     ReturnFull = "Y",
                     ArriveAfter = startdate,
-                    ArriveBefore = enddate
+                    ArriveBefore = enddate,
+                    ShowMasterCancel = 1
                 }
             };
 
@@ -181,9 +273,42 @@ namespace ReservationsUpdate
             float totalpaid = reservation.price_paidsum;
             float securitydeposit = 0;
             string cancellationreason = "";
+            string mastercancel = HandleMasterCancel(reservation);
+            string otaname = reservation.type_name;
+            string agent = reservation.travelagent_name; // HandleAgent(reservation);
+
 
             return $"EXEC UpsertVacationReservations {affiliate},'{source}','{PMC}','{property}','{unit}','{reservationid}','{reservationdate}'," +
-                $"'{reservationstatus}','{arrivaldate}','{departuredate}',{totalprice},{totalpaid},{securitydeposit},'{cancellationreason}'";
+                $"'{reservationstatus}','{arrivaldate}','{departuredate}',{totalprice},{totalpaid},{securitydeposit},'{cancellationreason}','{mastercancel}'," +
+                $"'{otaname}','{agent}'";
+        }
+
+        private static string HandleMasterCancel(dynamic reservation)
+        {
+            string result = "";
+            try
+            {
+                result = reservation.rental_guardian_master_cancel.status + "-" + reservation.rental_guardian_master_cancel.certificate_number;
+                if (result.Length < 5)
+                {
+                    result = "Not Enrolled";
+                }
+            }
+            catch
+            { }
+            return result;
+        }
+
+        private static string HandleAgent(dynamic reservation)
+        {
+            string result = "";
+            try
+            {
+                result = reservation.travelagent_name;  // sometimes empty, sometimes a string
+            }
+            catch
+            { }
+            return result;
         }
         public static string GetSLStatusName(int code)
         {
@@ -237,32 +362,35 @@ namespace ReservationsUpdate
             SQLFunctions sql1 = new SQLFunctions(Secrets.ReportingConnectionString());
 
             List<Dictionary<string, object>> vrmproperties = sql.ListDictionarySQLQuery("select PMC as companyname, credential1, credential2 from VacationCredentials" +
-                " where gatewayname = 'VRM'");
+                " where gatewayname = 'VRM'"); //test - need to remove
 
             foreach (var vrmproperty in vrmproperties)
             {
                 string company = vrmproperty["companyname"].ToString();
                 LogMessage($"Pulling data for {company}");
-                
+
                 for (int dategrouppoll = 0; dategrouppoll < numberofpulls; dategrouppoll++)
                 {
                     int propertycount = 0;
-                    string result = VRMResult(vrmproperty["credential1"].ToString(), vrmproperty["credential2"].ToString(),dategrouppoll);
+                    string result = VRMResult(vrmproperty["credential1"].ToString(), vrmproperty["credential2"].ToString(), dategrouppoll);
 
                     dynamic jsonresults = JsonConvert.DeserializeObject(result);
 
                     string sqlstatement = "";
                     int counter = 0;
-                    foreach (var reservation in jsonresults)
+                    if (jsonresults != null)
                     {
-                        reservation.propertyname = vrmproperty["companyname"].ToString();
-                        reservation.Source = "VRM";
-                        sqlstatement += BuildVRMUpsert(reservation, 17167, "VRM", company);
-                        if (counter++ % batchsize == 0)
+                        foreach (var reservation in jsonresults)
                         {
-                            //propertycount += sql1.SQLExecute(sqlstatement);
-                            propertycount += RunTransaction(sql1, sqlstatement);
-                            sqlstatement = "";
+                            reservation.propertyname = vrmproperty["companyname"].ToString();
+                            reservation.Source = "VRM";
+                            sqlstatement += BuildVRMUpsert(reservation, 17167, "VRM", company);
+                            if (counter++ % batchsize == 0)
+                            {
+                                //propertycount += sql1.SQLExecute(sqlstatement);
+                                propertycount += RunTransaction(sql1, sqlstatement);
+                                sqlstatement = "";
+                            }
                         }
                     }
                     if (sqlstatement != "")
