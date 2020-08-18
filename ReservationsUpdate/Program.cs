@@ -180,8 +180,8 @@ namespace ReservationsUpdate
             //    " where gatewayname = 'streamline'");
 
             List<Dictionary<string, object>> slproperties = sql.ListDictionarySQLQuery("select PMC as companyname, credential1, credential2 from VacationCredentials" +
-           //" where gatewayname = 'streamline'");// and id >= 175");
-             " where gatewayname = 'streamline' and id = 162");
+           " where gatewayname = 'streamline'");// and id >= 175");
+         //    " where gatewayname = 'streamline' and id = 162");
 
             List<string> badones = new List<string>();
 
