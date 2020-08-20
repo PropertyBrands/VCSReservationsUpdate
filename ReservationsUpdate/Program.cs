@@ -179,8 +179,8 @@ namespace ReservationsUpdate
             //List<Dictionary<string, object>> slproperties = sql.ListDictionarySQLQuery("select PMC as companyname, credential1, credential2 from VacationCredentials" +
             //    " where gatewayname = 'streamline'");
 
-            List<Dictionary<string, object>> slproperties = sql.ListDictionarySQLQuery("select PMC as companyname, credential1, credential2 from VacationCredentials" +
-           " where gatewayname = 'streamline'");// and id >= 175");
+            List<Dictionary<string, object>> slproperties = sql.ListDictionarySQLQuery("select PMC as companyname, accountid, credential1, credential2 from VacationCredentials" +
+           " where gatewayname = 'streamline' ");// and accountid is not null");// and id >= 175");
          //    " where gatewayname = 'streamline' and id = 162");
 
             List<string> badones = new List<string>();
@@ -188,6 +188,8 @@ namespace ReservationsUpdate
             foreach (Dictionary<string, object> slproperty in slproperties)
             {
                 string company = slproperty["companyname"].ToString();
+                string accountid = slproperty["accountid"].ToString();
+                accountid = (accountid.Length == 0)? "null": accountid;
                 LogMessage($"Pulling data for {company}");
                 for (int dategrouppoll = 0; dategrouppoll < numberofpulls; dategrouppoll++)
                 {
@@ -204,7 +206,7 @@ namespace ReservationsUpdate
                         {
                             reservation.propertyname = slproperty["companyname"].ToString();
                             reservation.Source = "Streamline";
-                            sqlstatement += BuildSLUpsert(reservation, 17167, "Streamline", company);
+                            sqlstatement += BuildSLUpsert(reservation, 17167, "Streamline", company, accountid);
                             if (counter++ % batchsize == 0)
                             {
                                 propertycount += sql1.SQLExecute(sqlstatement);
@@ -254,7 +256,7 @@ namespace ReservationsUpdate
              return GetHTTPResults(url, new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json"));
         }
 
-        public static string BuildSLUpsert(dynamic reservation, int affiliate, string source, string PMC)
+        public static string BuildSLUpsert(dynamic reservation, int affiliate, string source, string PMC, string accountid)
         {
             string property = reservation.location_name;
             property = NoBobbyTables(property);
@@ -280,7 +282,7 @@ namespace ReservationsUpdate
 
             return $"EXEC UpsertVacationReservations {affiliate},'{source}','{PMC}','{property}','{unit}','{reservationid}','{reservationdate}'," +
                 $"'{reservationstatus}','{arrivaldate}','{departuredate}',{totalprice},{totalpaid},{securitydeposit},'{cancellationreason}','{mastercancel}'," +
-                $"'{otaname}','{agent}'";
+                $"'{otaname}','{agent}', {accountid};\r\n";
         }
 
         private static string HandleMasterCancel(dynamic reservation)
@@ -361,12 +363,14 @@ namespace ReservationsUpdate
             SQLFunctions sql = new SQLFunctions(Secrets.CRMConnectionString());
             SQLFunctions sql1 = new SQLFunctions(Secrets.ReportingConnectionString());
 
-            List<Dictionary<string, object>> vrmproperties = sql.ListDictionarySQLQuery("select PMC as companyname, credential1, credential2 from VacationCredentials" +
+            List<Dictionary<string, object>> vrmproperties = sql.ListDictionarySQLQuery("select PMC as companyname, accountid, credential1, credential2 from VacationCredentials" +
                 " where gatewayname = 'VRM'"); //test - need to remove
 
             foreach (var vrmproperty in vrmproperties)
             {
                 string company = vrmproperty["companyname"].ToString();
+                string accountid = vrmproperty["accountid"].ToString();
+                accountid = (accountid.Length == 0) ? "null" : accountid;
                 LogMessage($"Pulling data for {company}");
 
                 for (int dategrouppoll = 0; dategrouppoll < numberofpulls; dategrouppoll++)
@@ -384,7 +388,7 @@ namespace ReservationsUpdate
                         {
                             reservation.propertyname = vrmproperty["companyname"].ToString();
                             reservation.Source = "VRM";
-                            sqlstatement += BuildVRMUpsert(reservation, 17167, "VRM", company);
+                            sqlstatement += BuildVRMUpsert(reservation, 17167, "VRM", company, accountid);
                             if (counter++ % batchsize == 0)
                             {
                                 //propertycount += sql1.SQLExecute(sqlstatement);
@@ -401,7 +405,7 @@ namespace ReservationsUpdate
             }
         }
 
-        public static string BuildVRMUpsert(dynamic reservation, int affiliate, string source, string PMC)
+        public static string BuildVRMUpsert(dynamic reservation, int affiliate, string source, string PMC, string accountid)
         {
             string property = reservation.PropertyName;
             property = NoBobbyTables(property);
@@ -422,7 +426,8 @@ namespace ReservationsUpdate
             string cancellationreason = reservation.CancellationReason;
 
             return $"EXEC UpsertVacationReservations {affiliate},'{source}','{PMC}','{property}','{unit}','{reservationid}','{reservationdate}'," +
-                $"'{reservationstatus}','{arrivaldate}','{departuredate}',{totalprice},{totalpaid},{securitydeposit},'{cancellationreason}';\r\n";
+                $"'{reservationstatus}','{arrivaldate}','{departuredate}',{totalprice},{totalpaid},{securitydeposit},'{cancellationreason}'," +
+                $"'','','',{accountid};\r\n";  // 3 empty ones are for master cancel future add in.
         }
 
         private static string VRMResult(string apikey, string clientcode, int dategrouppoll)
