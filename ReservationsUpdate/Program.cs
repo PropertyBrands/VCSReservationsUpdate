@@ -6,6 +6,7 @@ using System.Text;
 using PayFac.Utilities;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace ReservationsUpdate
 {
@@ -234,7 +235,8 @@ namespace ReservationsUpdate
 
         private static string StreamLineResult(string tokenkey, string tokensecret, int dategrouppoll)
         {
-            string url = "https://web.streamlinevrs.com/api/mjson"; 
+            string url = "https://web.streamlinevrs.com/api/mjson";
+            url = "https://web.streamlinevrs.com/api/json";
 
             string startdate = getstartdate(dategrouppoll, "M/d/yyyy");
             string enddate = getenddate(dategrouppoll, "M/d/yyyy");
@@ -277,14 +279,31 @@ namespace ReservationsUpdate
             string cancellationreason = "";
             string mastercancel = HandleMasterCancel(reservation);
             string otaname = reservation.type_name;
-            string agent = reservation.travelagent_name; // HandleAgent(reservation);
-
+            string agent = "";
+            try {
+                agent = HandleAgent(reservation);
+            }
+            catch { }// HandleAgent(reservation);
+            agent = NoBobbyTables(agent);
+            //string email = NoBobbyTables(reservation.email);
+            //string email2 = Regex.Replace(email, @"[^[a-z][A-Z][0-9]@", "-");
+            string firstname = "";
+            string lastname = "";
+            try
+            {
+                firstname = reservation.first_name;
+                lastname = reservation.last_name;
+            }
+            catch { }
+            firstname = NoBobbyTables(firstname);
+            lastname = NoBobbyTables(lastname);
 
             return $"EXEC UpsertVacationReservations {affiliate},'{source}','{PMC}','{property}','{unit}','{reservationid}','{reservationdate}'," +
                 $"'{reservationstatus}','{arrivaldate}','{departuredate}',{totalprice},{totalpaid},{securitydeposit},'{cancellationreason}','{mastercancel}'," +
-                $"'{otaname}','{agent}', {accountid};\r\n";
+                $"'{otaname}','{agent}', {accountid}, '{firstname}','{lastname}';\r\n";
         }
 
+   
         private static string HandleMasterCancel(dynamic reservation)
         {
             string result = "";
@@ -306,7 +325,10 @@ namespace ReservationsUpdate
             string result = "";
             try
             {
-                result = reservation.travelagent_name;  // sometimes empty, sometimes a string
+                if (reservation.travelagent_name != null)
+                {
+                    result = (string)reservation.travelagent_name;  // sometimes empty, sometimes a string
+                }
             }
             catch
             { }
