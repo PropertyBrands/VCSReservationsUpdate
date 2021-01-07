@@ -194,11 +194,12 @@ namespace ReservationsUpdate
                 LogMessage($"Pulling data for {company}");
                 for (int dategrouppoll = 0; dategrouppoll < numberofpulls; dategrouppoll++)
                 {
-                    string result = StreamLineResult(slproperty["credential1"].ToString(), slproperty["credential2"].ToString(), dategrouppoll);
-                    int propertycount = 0;
-                    dynamic jsonresults = JsonConvert.DeserializeObject(result);
+
                     try
                     {
+                        string result = StreamLineResult(slproperty["credential1"].ToString(), slproperty["credential2"].ToString(), dategrouppoll);
+                        int propertycount = 0;
+                        dynamic jsonresults = JsonConvert.DeserializeObject(result);
                         string test = $"{jsonresults.data.reservations.Count}";
                         LogMessage($"Pushing {test} results into SQL Server for {company}");
                         string sqlstatement = "";
@@ -216,7 +217,10 @@ namespace ReservationsUpdate
                             }
                         }
                         //RunTransaction(sql1, sqlstatement);
-                        propertycount += sql1.SQLExecute(sqlstatement);
+                        if (sqlstatement.Length > 10)  // don't run if there's no data
+                        {
+                            propertycount += sql1.SQLExecute(sqlstatement);
+                        }
                         LogMessage($"Processed {propertycount} blocks of properties for {company} in group {dategrouppoll}.");
 
                     }
@@ -297,7 +301,7 @@ namespace ReservationsUpdate
             catch { }
             firstname = NoBobbyTables(firstname);
             lastname = NoBobbyTables(lastname);
-
+            accountid = (accountid.Length < 3) ? "null" : accountid;
             return $"EXEC UpsertVacationReservations {affiliate},'{source}','{PMC}','{property}','{unit}','{reservationid}','{reservationdate}'," +
                 $"'{reservationstatus}','{arrivaldate}','{departuredate}',{totalprice},{totalpaid},{securitydeposit},'{cancellationreason}','{mastercancel}'," +
                 $"'{otaname}','{agent}', {accountid}, '{firstname}','{lastname}';\r\n";
