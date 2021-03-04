@@ -104,6 +104,7 @@ namespace ReservationsUpdate
             {
                 ProcessStreamline();
                 ProcessVRM();
+                ProcessLiveRez();
             }
             else if (args[0].ToLower() == "renew")
             {
@@ -142,7 +143,7 @@ namespace ReservationsUpdate
                     LogMessage($"Error updating company {company} because {ex.Message}");
                 }
             }
-         }
+        }
 
         private static string StreamLineNewTokenSQLUpdate(string PMC, string cred1, string cred2, string updated, string expires)
         {
@@ -157,7 +158,7 @@ namespace ReservationsUpdate
 
         private static string StreamLineNewTokens(string tokenkey, string tokensecret)
         {
-            string url = "https://web.streamlinevrs.com/api/mjson";  
+            string url = "https://web.streamlinevrs.com/api/mjson";
 
             var payload = new StreamlineRenewTokens
             {
@@ -168,11 +169,11 @@ namespace ReservationsUpdate
                     TokenSecret = tokensecret
                 }
             };
-           
+
             return GetHTTPResults(url, new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json"));
         }
 
-        private static  void ProcessStreamline()
+        private static void ProcessStreamline()
         {
             SQLFunctions sql = new SQLFunctions(Secrets.CRMConnectionString());
             SQLFunctions sql1 = new SQLFunctions(Secrets.ReportingConnectionString());
@@ -182,7 +183,7 @@ namespace ReservationsUpdate
 
             List<Dictionary<string, object>> slproperties = sql.ListDictionarySQLQuery("select PMC as companyname, accountid, credential1, credential2 from VacationCredentials" +
            " where gatewayname = 'streamline' ");// and accountid is not null");// and id >= 175");
-         //    " where gatewayname = 'streamline' and id = 162");
+                                                 //    " where gatewayname = 'streamline' and id = 162");
 
             List<string> badones = new List<string>();
 
@@ -190,7 +191,7 @@ namespace ReservationsUpdate
             {
                 string company = slproperty["companyname"].ToString();
                 string accountid = slproperty["accountid"].ToString();
-                accountid = (accountid.Length == 0)? "null": accountid;
+                accountid = (accountid.Length == 0) ? "null" : accountid;
                 LogMessage($"Pulling data for {company}");
                 for (int dategrouppoll = 0; dategrouppoll < numberofpulls; dategrouppoll++)
                 {
@@ -259,7 +260,7 @@ namespace ReservationsUpdate
                 }
             };
 
-             return GetHTTPResults(url, new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json"));
+            return GetHTTPResults(url, new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json"));
         }
 
         public static string BuildSLUpsert(dynamic reservation, int affiliate, string source, string PMC, string accountid)
@@ -284,7 +285,8 @@ namespace ReservationsUpdate
             string mastercancel = HandleMasterCancel(reservation);
             string otaname = reservation.type_name;
             string agent = "";
-            try {
+            try
+            {
                 agent = HandleAgent(reservation);
             }
             catch { }// HandleAgent(reservation);
@@ -307,7 +309,7 @@ namespace ReservationsUpdate
                 $"'{otaname}','{agent}', {accountid}, '{firstname}','{lastname}';\r\n";
         }
 
-   
+
         private static string HandleMasterCancel(dynamic reservation)
         {
             string result = "";
@@ -427,7 +429,7 @@ namespace ReservationsUpdate
                         propertycount += RunTransaction(sql1, sqlstatement);
                     LogMessage($"Processed {propertycount} blocks of properties for {company} in group {dategrouppoll}.");
                 }
-                
+
             }
         }
 
@@ -468,7 +470,7 @@ namespace ReservationsUpdate
                 DateEnd = getenddate(dategrouppoll, "yyyy-MM-dd") // "2020-07-31"
             };
 
-            return GetHTTPResults(url, new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json")); 
+            return GetHTTPResults(url, new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json"));
         }
 
         private static string GetHTTPResults(string url, StringContent httpContent)
@@ -493,7 +495,7 @@ namespace ReservationsUpdate
         }
 
 
-        public static int RunTransaction(SQLFunctions sql,string sqlstatement)
+        public static int RunTransaction(SQLFunctions sql, string sqlstatement)
         {
             int result = -1;
             try
@@ -516,6 +518,139 @@ namespace ReservationsUpdate
                 }
             }
             return result;
+        }
+
+        private static void ProcessLiveRez()
+        {
+            SQLFunctions sql = new SQLFunctions(Secrets.CRMConnectionString());
+            SQLFunctions sql1 = new SQLFunctions(Secrets.ReportingConnectionString());
+
+            List<Dictionary<string, object>> lrproperties = sql.ListDictionarySQLQuery("select PMC as companyname, credential1, credential2 from VacationCredentials" +
+             " where gatewayname = 'LiveRez'" +  // 200 is vrm, 100 is streamline
+                                                 //   "and companyid in( 116)" +// 106,107,108,109,110,111 )" +
+             "");
+
+
+            foreach (var lrproperty in lrproperties)
+            {
+                string company = lrproperty["companyname"].ToString();
+                Console.WriteLine($"Pulling data for {company}");
+                int blocksize = 50;
+                int blocknumber = -1;
+                int recordcount = 9999999; // initial setting
+
+                while ((++blocknumber) * blocksize < recordcount)
+                {
+                    string result = LiveRezResultBlock(lrproperty["credential1"].ToString(), lrproperty["credential2"].ToString(), blocksize, blocknumber * blocksize);
+
+                    dynamic jsonresults = JsonConvert.DeserializeObject(result);
+
+                    // get the real recordcount
+                    string srecordcount = jsonresults.recordCount;
+                    recordcount = int.Parse(srecordcount);
+
+                    string sqlstatement = "";
+
+                    foreach (var reservation in jsonresults.data)
+                    {
+                        // look up the reservation and get the details 
+                        string reservationid = reservation.reservationId;
+                        string detailstring = LiveRezReservationDetails(lrproperty["credential1"].ToString(), lrproperty["credential2"].ToString(), reservationid);
+                        dynamic reservationdetails = JsonConvert.DeserializeObject(detailstring);
+
+                        reservationdetails.propertyname = lrproperty["companyname"].ToString();
+                        reservationdetails.Source = "LiveRez";
+                        sqlstatement += BuildLiveRezUpsert(reservationdetails, 17167, "LiveRez", company);
+                    }
+                    sql1.SQLExecute($"Begin Transaction; {sqlstatement} Commit;");
+                }
+            }
+        }
+
+        private static string LiveRezResultBlock(string credential1, string credential2, int blocksize, int offset)
+        {
+            string url = "https://api.liverez.com/v1/reservations";
+            string startdate = DateTime.Now.AddDays(-14).ToString("yyyy-MM-dd");
+            string enddate = DateTime.Now.AddMonths(16).ToString("yyyy-MM-dd");
+
+            string parms = $"startDate={startdate}&endDate={enddate}&dateType=check_in&type=guest&status=APPROVED,CANCELLED&limit={blocksize}&offset={offset}";
+
+            string result = "";
+
+
+            // Serialize our concrete class into a JSON String
+            // var stringPayload = JsonConvert.SerializeObject(payload);
+            // // Wrap our JSON inside a StringContent which then can be used by the HttpClient class
+            // var httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+            using (var httpClient = new HttpClient())
+            {
+                httpClient.DefaultRequestHeaders.Add("X-API-Key", credential1);
+                httpClient.DefaultRequestHeaders.Add("X-LiveRez-Partner-Key", credential2);
+                // Do the actual request and await the response
+                var httpResponse = httpClient.GetAsync($"{url}?{parms}").GetAwaiter().GetResult();
+
+                // If the response contains content we want to read it!
+                if (httpResponse.Content != null)
+                {
+                    result = httpResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+                    // From here on you could deserialize the ResponseContent back again to a concrete C# type using Json.Net
+                }
+            }
+            return result;
+        }
+
+        private static string LiveRezReservationDetails(string credential1, string credential2, string reservationnumber)
+        {
+            string url = $"https://api.liverez.com/v1/reservations/{reservationnumber}";
+            string result = "";
+
+
+            // Serialize our concrete class into a JSON String
+            // var stringPayload = JsonConvert.SerializeObject(payload);
+            // // Wrap our JSON inside a StringContent which then can be used by the HttpClient class
+            // var httpContent = new StringContent(stringPayload, Encoding.UTF8, "application/json");
+
+            using (var httpClient = new HttpClient())
+            {
+                httpClient.DefaultRequestHeaders.Add("X-API-Key", credential1);
+                httpClient.DefaultRequestHeaders.Add("X-LiveRez-Partner-Key", credential2);
+                // Do the actual request and await the response
+                var httpResponse = httpClient.GetAsync($"{url}").GetAwaiter().GetResult();
+
+                // If the response contains content we want to read it!
+                if (httpResponse.Content != null)
+                {
+                    result = httpResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+                    // From here on you could deserialize the ResponseContent back again to a concrete C# type using Json.Net
+                }
+            }
+            return result;
+        }
+        public static string BuildLiveRezUpsert(dynamic reservation, int affiliate, string source, string PMC)
+        {
+            string property = "somewhere";// reservation.PropertyName;
+            property = NoBobbyTables(property);
+            string unit = reservation.listingId;
+            unit = NoBobbyTables(unit);
+            string reservationid = reservation.reservationId;
+            string reservationdate = reservation.createdAt;
+            reservationdate = DateTime.Parse(reservationdate).ToString("yyyy-MM-dd");
+            //int statuscode = reservation.status_code;
+            string reservationstatus = reservation.status;
+            string arrivaldate = reservation.checkIn;
+            arrivaldate = DateTime.Parse(arrivaldate).ToString("yyyy-MM-dd");
+            string departuredate = reservation.checkOut;
+            departuredate = DateTime.Parse(departuredate).ToString("yyyy-MM-dd");
+            float totalprice = reservation.total;
+            float totalpaid = reservation.totalPayments;
+            float securitydeposit = 0;
+            string cancellationreason = (reservation.status == "CANCELLED") ? "Cancelled for some reason" : "";
+
+            return $"EXEC UpsertVacationReservations {affiliate},'{source}','{PMC}','{property}','{unit}','{reservationid}','{reservationdate}'," +
+                $"'{reservationstatus}','{arrivaldate}','{departuredate}',{totalprice},{totalpaid},{securitydeposit},'{cancellationreason}';\r\n";
         }
 
     }
