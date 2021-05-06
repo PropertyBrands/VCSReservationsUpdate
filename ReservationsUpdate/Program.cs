@@ -525,7 +525,7 @@ namespace ReservationsUpdate
             SQLFunctions sql = new SQLFunctions(Secrets.CRMConnectionString());
             SQLFunctions sql1 = new SQLFunctions(Secrets.ReportingConnectionString());
 
-            List<Dictionary<string, object>> lrproperties = sql.ListDictionarySQLQuery("select PMC as companyname, credential1, credential2 from VacationCredentials" +
+            List<Dictionary<string, object>> lrproperties = sql.ListDictionarySQLQuery("select PMC as companyname, accountid, credential1, credential2 from VacationCredentials" +
              " where gatewayname = 'LiveRez'" +  // 200 is vrm, 100 is streamline
                                                  //   "and companyid in( 116)" +// 106,107,108,109,110,111 )" +
              "");
@@ -534,7 +534,10 @@ namespace ReservationsUpdate
             foreach (var lrproperty in lrproperties)
             {
                 string company = lrproperty["companyname"].ToString();
-                Console.WriteLine($"Pulling data for {company}");
+                string accountid = lrproperty["accountid"].ToString();
+                accountid = (accountid.Length == 0) ? "null" : accountid;
+                LogMessage($"Pulling data for {company}");
+ 
                 int blocksize = 50;
                 int blocknumber = -1;
                 int recordcount = 9999999; // initial setting
@@ -550,6 +553,7 @@ namespace ReservationsUpdate
                     recordcount = int.Parse(srecordcount);
 
                     string sqlstatement = "";
+                    Console.WriteLine($"Processing {recordcount} records");
 
                     foreach (var reservation in jsonresults.data)
                     {
@@ -560,7 +564,7 @@ namespace ReservationsUpdate
 
                         reservationdetails.propertyname = lrproperty["companyname"].ToString();
                         reservationdetails.Source = "LiveRez";
-                        sqlstatement += BuildLiveRezUpsert(reservationdetails, 17167, "LiveRez", company);
+                        sqlstatement += BuildLiveRezUpsert(reservationdetails, 17167, "LiveRez", company,accountid);
                     }
                     sql1.SQLExecute($"Begin Transaction; {sqlstatement} Commit;");
                 }
@@ -629,7 +633,7 @@ namespace ReservationsUpdate
             }
             return result;
         }
-        public static string BuildLiveRezUpsert(dynamic reservation, int affiliate, string source, string PMC)
+        public static string BuildLiveRezUpsert(dynamic reservation, int affiliate, string source, string PMC, string accountid)
         {
             string property = "somewhere";// reservation.PropertyName;
             property = NoBobbyTables(property);
@@ -650,7 +654,12 @@ namespace ReservationsUpdate
             string cancellationreason = (reservation.status == "CANCELLED") ? "Cancelled for some reason" : "";
 
             return $"EXEC UpsertVacationReservations {affiliate},'{source}','{PMC}','{property}','{unit}','{reservationid}','{reservationdate}'," +
-                $"'{reservationstatus}','{arrivaldate}','{departuredate}',{totalprice},{totalpaid},{securitydeposit},'{cancellationreason}';\r\n";
+                $"'{reservationstatus}','{arrivaldate}','{departuredate}',{totalprice},{totalpaid},{securitydeposit},'{cancellationreason}',"+
+               $"'','','',{accountid};\r\n";  // 3 empty ones are for master cancel future add in.
+
+      //      return $"EXEC UpsertVacationReservations {affiliate},'{source}','{PMC}','{property}','{unit}','{reservationid}','{reservationdate}'," +
+      //$"'{reservationstatus}','{arrivaldate}','{departuredate}',{totalprice},{totalpaid},{securitydeposit},'{cancellationreason}'," +
+      //$"'','','',{accountid};\r\n";  // 3 empty ones are for master cancel future add in.
         }
 
     }
